@@ -35,6 +35,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 
 @SuppressWarnings("unused")
@@ -242,53 +243,14 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
         }
 
         private URL[] getPlugins() throws IOException {
-            URL pluginsUrl = this.getClass().getClassLoader().getResource("/plugins");
+            ClassLoader classLoader = getClass().getClassLoader();
 
-            if (pluginsUrl == null) {
-                throw new IOException("Error loading Sonar plugins!");
+            URL jsPluginUrl = classLoader.getResource("plugins/sonar-javascript-plugin-4.1.0.6085.jar");
+            if (jsPluginUrl == null) {
+                throw new IOException("Error loading JavaScript Sonar plugin!");
             }
 
-            URI pluginsUri;
-
-            try {
-                pluginsUri = pluginsUrl.toURI();
-            } catch (URISyntaxException e) {
-                throw new IOException("Error loading Sonar plugins!");
-            }
-
-            Path pluginsPath;
-
-            if ("file".equalsIgnoreCase(pluginsUri.getScheme())) {
-                pluginsPath = Paths.get(pluginsUri);
-            } else {
-                try (FileSystem fileSystem = FileSystems.newFileSystem(pluginsUri, Collections.emptyMap())) {
-                    pluginsPath = fileSystem.getPath("/plugins");
-                }
-            }
-
-            List<URL> pluginsList = new ArrayList<>();
-
-            try (DirectoryStream<Path> directoryStream = Files.newDirectoryStream(pluginsPath, "*.jar")) {
-                if ("file".equalsIgnoreCase(pluginsUri.getScheme())) {
-                    for (Path path : directoryStream) {
-                        try {
-                            pluginsList.add(path.toUri().toURL());
-                        } catch (MalformedURLException e) {
-                            throw new IOException("Error loading Sonar plugins!");
-                        }
-                    }
-                } else {
-                    for (Path path : directoryStream) {
-                        try {
-                            pluginsList.add(new URL(pluginsUrl, path.toString()));
-                        } catch (MalformedURLException e) {
-                            throw new IOException("Error loading Sonar plugins!");
-                        }
-                    }
-                }
-            }
-
-            return pluginsList.toArray(new URL[0]);
+            return new URL[] {jsPluginUrl};
         }
 
         private String getRuleSpecUrl(String ruleKey) {
