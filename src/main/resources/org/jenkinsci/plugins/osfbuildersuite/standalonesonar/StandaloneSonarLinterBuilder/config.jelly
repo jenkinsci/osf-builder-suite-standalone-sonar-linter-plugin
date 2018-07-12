@@ -1,0 +1,28 @@
+<?jelly escape-by-default='true'?>
+<j:jelly
+    xmlns:j="jelly:core"
+    xmlns:st="jelly:stapler"
+    xmlns:d="jelly:define"
+    xmlns:l="/lib/layout"
+    xmlns:t="/lib/hudson"
+    xmlns:f="/lib/form">
+
+    <f:entry
+        title="Source Pattern"
+        field="sourcePattern"
+        help="/plugin/osf-builder-suite-standalone-sonar-linter/help/projectConfig-sourcePattern.html">
+
+        <f:textbox clazz="required"/>
+    </f:entry>
+
+    <f:entry
+        title="Exclude Patterns"
+        help="/plugin/osf-builder-suite-standalone-sonar-linter/help/projectConfig-excludePatterns.html">
+
+        <f:repeatableProperty field="excludePatterns">
+            <div align="right">
+                <f:repeatableDeleteButton />
+            </div>
+        </f:repeatableProperty>
+    </f:entry>
+</j:jelly>

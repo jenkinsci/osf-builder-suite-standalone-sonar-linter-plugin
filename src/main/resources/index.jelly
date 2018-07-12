@@ -1,0 +1,2 @@
+<?jelly escape-by-default='true'?>
+<div>Run the standalone version of Sonar to lint your files</div>

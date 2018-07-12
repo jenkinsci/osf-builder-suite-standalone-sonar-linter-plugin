@@ -1,0 +1,13 @@
+# MacOS
+.DS_Store
+
+# IntelliJ IDEA
+/.idea/
+/osf-builder-suite-standalone-sonar-linter.iml
+
+# Workspace
+/work/
+/target/
+
+# Sonar plugins
+/src/main/resources/plugins/*.jar
