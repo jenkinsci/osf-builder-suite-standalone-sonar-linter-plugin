@@ -1,5 +1,7 @@
 package org.jenkinsci.plugins.osfbuildersuite.standalonesonar;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import hudson.AbortException;
 import hudson.Launcher;
 import hudson.Extension;
@@ -14,6 +16,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.codehaus.plexus.util.DirectoryScanner;
 import org.jenkinsci.Symbol;
 import org.jenkinsci.plugins.osfbuildersuite.standalonesonar.repeatable.ExcludePattern;
+import org.jenkinsci.plugins.osfbuildersuite.standalonesonar.repeatable.SourcePattern;
 import org.kohsuke.stapler.*;
 import org.sonarsource.sonarlint.core.StandaloneSonarLintEngineImpl;
 import org.sonarsource.sonarlint.core.client.api.common.analysis.AnalysisResults;
@@ -26,53 +29,49 @@ import org.sonarsource.sonarlint.core.tracking.Trackable;
 
 import javax.annotation.Nonnull;
 import java.io.*;
-import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
-import java.nio.file.*;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 
 @SuppressWarnings("unused")
 public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuildStep {
 
-    private String sourcePattern;
-    private List<ExcludePattern> excludePatterns;
+    private List<SourcePattern> sourcePatterns;
+    private String reportPath;
 
     @DataBoundConstructor
     public StandaloneSonarLinterBuilder(
-            String sourcePattern,
-            List<ExcludePattern> excludePatterns) {
+            List<SourcePattern> sourcePatterns,
+            String reportPath) {
 
-        this.sourcePattern = sourcePattern;
-        this.excludePatterns = excludePatterns;
+        this.sourcePatterns = sourcePatterns;
+        this.reportPath = reportPath;
     }
 
     @SuppressWarnings("unused")
-    public String getSourcePattern() {
-        return sourcePattern;
-    }
-
-    @SuppressWarnings("unused")
-    @DataBoundSetter
-    public void setSourcePattern(String sourcePattern) {
-        this.sourcePattern = sourcePattern;
-    }
-
-    @SuppressWarnings("unused")
-    public List<ExcludePattern> getExcludePatterns() {
-        return excludePatterns;
+    public List<SourcePattern> getSourcePatterns() {
+        return sourcePatterns;
     }
 
     @SuppressWarnings("unused")
     @DataBoundSetter
-    public void setExcludePatterns(List<ExcludePattern> excludePatterns) {
-        this.excludePatterns = excludePatterns;
+    public void setSourcePatterns(List<SourcePattern> sourcePatterns) {
+        this.sourcePatterns = sourcePatterns;
+    }
+
+    @SuppressWarnings("unused")
+    public String getReportPath() {
+        return reportPath;
+    }
+
+    @SuppressWarnings("unused")
+    @DataBoundSetter
+    public void setReportPath(String reportPath) {
+        this.reportPath = reportPath;
     }
 
     @Override
@@ -88,7 +87,7 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
         logger.println(String.format("--[B: %s]--", getDescriptor().getDisplayName()));
 
         workspace.act(new StandaloneSonarLinterCallable(
-                workspace, listener, sourcePattern, excludePatterns
+                workspace, listener, sourcePatterns, reportPath
         ));
 
         logger.println(String.format("--[E: %s]--", getDescriptor().getDisplayName()));
@@ -123,129 +122,191 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
 
         private final FilePath workspace;
         private final TaskListener listener;
-        private final String sourcePattern;
-        private final List<ExcludePattern> excludePatterns;
+        private final List<SourcePattern> sourcePatterns;
+        private final String reportPath;
 
         @SuppressWarnings("WeakerAccess")
         public StandaloneSonarLinterCallable(
                 FilePath workspace,
                 TaskListener listener,
-                String sourcePattern,
-                List<ExcludePattern> excludePatterns) {
+                List<SourcePattern> sourcePatterns,
+                String reportPath) {
 
             this.workspace = workspace;
             this.listener = listener;
-            this.sourcePattern = sourcePattern;
-            this.excludePatterns = excludePatterns;
+            this.sourcePatterns = sourcePatterns;
+            this.reportPath = reportPath;
         }
 
         @Override
-        public Void invoke(File dir, VirtualChannel channel) throws IOException, InterruptedException {
+        public Void invoke(File dir, VirtualChannel channel) throws IOException {
             PrintStream logger = listener.getLogger();
 
-            if (StringUtils.isEmpty(sourcePattern)) {
-                throw new AbortException("\"Source Pattern\" was not defined!");
+            if (sourcePatterns == null || sourcePatterns.isEmpty()) {
+                throw new AbortException("No \"Source Pattern\" defined!");
             }
 
-            logger.println(String.format("[+] Linting \"%s\"", sourcePattern));
+            JsonArray errors = new JsonArray();
 
-            DirectoryScanner directoryScanner = new DirectoryScanner();
-            directoryScanner.setBasedir(dir);
-            directoryScanner.setIncludes(new String[] {sourcePattern});
+            for (SourcePattern sourcePattern : sourcePatterns) {
+                logger.println(String.format("[+] Linting \"%s\"", sourcePattern.getSourcePattern()));
 
-            if (excludePatterns != null) {
-                directoryScanner.setExcludes(excludePatterns
-                        .stream()
-                        .map(ExcludePattern::getExcludePattern)
-                        .filter(StringUtils::isNotBlank)
-                        .toArray(String[]::new)
+                DirectoryScanner directoryScanner = new DirectoryScanner();
+                directoryScanner.setBasedir(dir);
+                directoryScanner.setIncludes(new String[]{sourcePattern.getSourcePattern()});
+
+                if (sourcePattern.getExcludePatterns() != null && !sourcePattern.getExcludePatterns().isEmpty()) {
+                    directoryScanner.setExcludes(sourcePattern.getExcludePatterns()
+                            .stream()
+                            .map(ExcludePattern::getExcludePattern)
+                            .filter(StringUtils::isNotBlank)
+                            .toArray(String[]::new)
+                    );
+                }
+
+                directoryScanner.setCaseSensitive(true);
+                directoryScanner.scan();
+
+                List<ClientInputFile> inputFiles = Arrays.stream(directoryScanner.getIncludedFiles())
+                        .map(relativePath -> new DefaultClientInputFile(dir, relativePath))
+                        .collect(Collectors.toList());
+
+                StandaloneGlobalConfiguration standaloneGlobalConfiguration = StandaloneGlobalConfiguration.builder()
+                        .addPlugins(getPlugins())
+                        .setLogOutput(new DefaultLogOutput(listener))
+                        .build();
+
+                StandaloneSonarLintEngine sonarLintEngine = new StandaloneSonarLintEngineImpl(standaloneGlobalConfiguration);
+
+                StandaloneAnalysisConfiguration analysisConfiguration = new StandaloneAnalysisConfiguration(
+                        dir.toPath(),  dir.toPath(), inputFiles, new HashMap<>()
                 );
-            }
 
-            directoryScanner.setCaseSensitive(true);
-            directoryScanner.scan();
+                DefaultIssueListener issueListener = new DefaultIssueListener();
+                AnalysisResults analysisResults = sonarLintEngine.analyze(
+                        analysisConfiguration, issueListener, null, null
+                );
 
-            List<ClientInputFile> inputFiles = Arrays.stream(directoryScanner.getIncludedFiles())
-                    .map(relativePath -> new DefaultClientInputFile(
-                            (new File(dir, relativePath)).getAbsolutePath(), relativePath
-                    ))
-                    .collect(Collectors.toList());
+                sonarLintEngine.stop();
 
-            StandaloneGlobalConfiguration standaloneGlobalConfiguration = StandaloneGlobalConfiguration.builder()
-                    .addPlugins(getPlugins())
-                    .setLogOutput(new DefaultLogOutput(listener))
-                    .build();
+                analysisResults.failedAnalysisFiles().forEach(clientInputFile -> {
+                    JsonObject error = new JsonObject();
+                    error.addProperty("path", clientInputFile.relativePath());
+                    error.addProperty("startLine", 0);
+                    error.addProperty("startColumn", 0);
+                    error.addProperty("message", "FAIL : Failed to analyze!");
 
-            StandaloneSonarLintEngine sonarLintEngine = new StandaloneSonarLintEngineImpl(standaloneGlobalConfiguration);
+                    errors.add(error);
 
-            StandaloneAnalysisConfiguration analysisConfiguration = new StandaloneAnalysisConfiguration(
-                    dir.toPath(),  dir.toPath(), inputFiles, new HashMap<>()
-            );
+                    logger.println(String.format(
+                            " ~ FAIL : %s",
+                            clientInputFile.relativePath()
+                    ));
+                });
 
-            DefaultIssueListener issueListener = new DefaultIssueListener();
-
-            AnalysisResults analysisResults = sonarLintEngine.analyze(
-                    analysisConfiguration, issueListener, null, null
-            );
-
-            sonarLintEngine.stop();
-
-            if (!analysisResults.failedAnalysisFiles().isEmpty()) {
-                throw new AbortException(String.format("Failed to lint %s !", sourcePattern));
-            }
-
-            List<Trackable> trackableIssues = issueListener.get()
-                    .stream()
-                    .map(IssueTrackable::new)
-                    .collect(Collectors.toList());
-
-            if (!trackableIssues.isEmpty()) {
-                trackableIssues.stream()
+                issueListener.get()
+                        .stream()
+                        .map(IssueTrackable::new)
                         .map(Trackable::getIssue)
                         .forEach(issue -> {
-                            logger.println();
+                            ClientInputFile clientInputFile = issue.getInputFile();
+                            String ruleSpecUrl = getRuleSpecUrl(issue.getRuleKey());
 
-                            ClientInputFile inputFile = issue.getInputFile();
-                            String inputFilePath = "UNKNOWN";
+                            if (clientInputFile != null) {
+                                JsonObject error = new JsonObject();
+                                error.addProperty("path", clientInputFile.relativePath());
+                                error.addProperty("startLine", issue.getStartLine());
+                                error.addProperty("startColumn", issue.getStartLineOffset());
+                                error.addProperty("endLine", issue.getEndLine());
+                                error.addProperty("endColumn", issue.getEndLineOffset());
+                                error.addProperty("message", String.format(
+                                        "ERROR : [%s/%s/%s] %s\n%s%s",
+                                        issue.getSeverity(),
+                                        issue.getType(),
+                                        issue.getRuleKey(),
+                                        issue.getRuleName(),
+                                        issue.getMessage(),
+                                        ruleSpecUrl != null ? "\n" + ruleSpecUrl : ""
+                                ));
 
-                            if (inputFile != null) {
-                                inputFilePath = inputFile.relativePath();
+                                errors.add(error);
                             }
 
                             logger.println(String.format(
-                                    " ~ [%s/%s/%s] %s@%s,%s-%s,%s",
+                                    " ~ ERROR : [%s/%s/%s] %s@%s,%s-%s,%s",
                                     issue.getSeverity(),
                                     issue.getType(),
                                     issue.getRuleKey(),
-                                    inputFilePath,
+                                    clientInputFile != null ? clientInputFile.relativePath() : "UNKNOWN",
                                     issue.getStartLine(),
                                     issue.getStartLineOffset(),
                                     issue.getEndLine(),
                                     issue.getEndLineOffset()
                             ));
 
-                            logger.println(String.format("   %s", issue.getRuleName()));
-                            logger.println(String.format("   %s", issue.getMessage()));
-
-                            String ruleSpecUrl = getRuleSpecUrl(issue.getRuleKey());
+                            logger.println(String.format("           %s", issue.getRuleName()));
+                            logger.println(String.format("           %s", issue.getMessage()));
 
                             if (ruleSpecUrl != null) {
-                                logger.println(String.format("   %s", ruleSpecUrl));
+                                logger.println(String.format("           %s", ruleSpecUrl));
                             }
                         });
 
+                if (errors.size() > 0) {
+                    logger.println(" + Fail");
+                } else {
+                    logger.println(" + Ok");
+                }
+
                 logger.println();
-                throw new AbortException(String.format("Found %s errors!", trackableIssues.size()));
             }
 
-            logger.println(" + Ok");
+            if (!StringUtils.isEmpty(reportPath)) {
+                @SuppressWarnings("UnnecessaryLocalVariable")
+                File wDirectory = dir;
+                File rDirectory = new File(wDirectory, reportPath);
+
+                Path wDirectoryPath = wDirectory.toPath().normalize();
+                Path rDirectoryPath = rDirectory.toPath().normalize();
+
+                if (!rDirectoryPath.startsWith(wDirectoryPath)) {
+                    logger.println();
+                    throw new AbortException(
+                            "Invalid value for \"Report Path\"! The path needs to be inside the workspace!"
+                    );
+                }
+
+                if (!rDirectory.exists()) {
+                    if (!rDirectory.mkdirs()) {
+                        logger.println();
+                        throw new AbortException(String.format("Failed to create %s!", rDirectory.getAbsolutePath()));
+                    }
+                }
+
+                File reportFile = new File(rDirectory, String.format("SonarLinter_%s.json", UUID.randomUUID().toString()));
+                if (reportFile.exists()) {
+                    throw new AbortException(String.format(
+                            "reportFile=%s already exists!",
+                            reportFile.getAbsolutePath()
+                    ));
+                }
+
+                Writer reportFW = new OutputStreamWriter(new FileOutputStream(reportFile), "UTF-8");
+                reportFW.write(errors.toString());
+                reportFW.close();
+            }
+
+            if (errors.size() > 0) {
+                throw new AbortException("SonarLint FAILED!");
+            }
+
             return null;
         }
 
         private URL[] getPlugins() throws IOException {
             ClassLoader classLoader = getClass().getClassLoader();
 
-            URL jsPluginUrl = classLoader.getResource("plugins/sonar-javascript-plugin-4.1.0.6085.jar");
+            URL jsPluginUrl = classLoader.getResource("plugins/sonar-javascript-plugin-5.0.0.6962.jar");
             if (jsPluginUrl == null) {
                 throw new IOException("Error loading JavaScript Sonar plugin!");
             }
