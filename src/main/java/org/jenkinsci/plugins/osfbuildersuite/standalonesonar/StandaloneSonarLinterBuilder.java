@@ -139,7 +139,7 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
         }
 
         @Override
-        public Void invoke(File dir, VirtualChannel channel) throws IOException {
+        public Void invoke(File dir, VirtualChannel channel) throws IOException, InterruptedException {
             PrintStream logger = listener.getLogger();
 
             if (sourcePatterns == null || sourcePatterns.isEmpty()) {
@@ -190,18 +190,18 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
                 sonarLintEngine.stop();
 
                 analysisResults.failedAnalysisFiles().forEach(clientInputFile -> {
+                    logger.println(String.format(
+                            " ~ ERROR parsing %s",
+                            clientInputFile.relativePath()
+                    ));
+
                     JsonObject error = new JsonObject();
                     error.addProperty("path", clientInputFile.relativePath());
                     error.addProperty("startLine", 0);
                     error.addProperty("startColumn", 0);
-                    error.addProperty("message", "FAIL : Failed to analyze!");
+                    error.addProperty("message", "Failed to parse!");
 
                     errors.add(error);
-
-                    logger.println(String.format(
-                            " ~ FAIL : %s",
-                            clientInputFile.relativePath()
-                    ));
                 });
 
                 issueListener.get()
@@ -212,36 +212,16 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
                             ClientInputFile clientInputFile = issue.getInputFile();
                             String ruleSpecUrl = getRuleSpecUrl(issue.getRuleKey());
 
-                            if (clientInputFile != null) {
-                                JsonObject error = new JsonObject();
-                                error.addProperty("path", clientInputFile.relativePath());
-                                error.addProperty("startLine", issue.getStartLine());
-                                error.addProperty("startColumn", issue.getStartLineOffset());
-                                error.addProperty("endLine", issue.getEndLine());
-                                error.addProperty("endColumn", issue.getEndLineOffset());
-                                error.addProperty("message", String.format(
-                                        "ERROR : [%s/%s/%s] %s\n%s%s",
-                                        issue.getSeverity(),
-                                        issue.getType(),
-                                        issue.getRuleKey(),
-                                        issue.getRuleName(),
-                                        issue.getMessage(),
-                                        ruleSpecUrl != null ? "\n" + ruleSpecUrl : ""
-                                ));
-
-                                errors.add(error);
-                            }
-
                             logger.println(String.format(
-                                    " ~ ERROR : [%s/%s/%s] %s@%s,%s-%s,%s",
-                                    issue.getSeverity(),
-                                    issue.getType(),
-                                    issue.getRuleKey(),
+                                    " ~ ERROR parsing %s@%s,%s-%s,%s [%s/%s/%s]",
                                     clientInputFile != null ? clientInputFile.relativePath() : "UNKNOWN",
                                     issue.getStartLine(),
                                     issue.getStartLineOffset(),
                                     issue.getEndLine(),
-                                    issue.getEndLineOffset()
+                                    issue.getEndLineOffset(),
+                                    issue.getSeverity(),
+                                    issue.getType(),
+                                    issue.getRuleKey()
                             ));
 
                             logger.println(String.format("           %s", issue.getRuleName()));
@@ -250,40 +230,60 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
                             if (ruleSpecUrl != null) {
                                 logger.println(String.format("           %s", ruleSpecUrl));
                             }
+
+                            if (clientInputFile != null) {
+                                JsonObject error = new JsonObject();
+                                error.addProperty("path", clientInputFile.relativePath());
+                                error.addProperty("startLine", issue.getStartLine());
+                                error.addProperty("startColumn", issue.getStartLineOffset());
+                                error.addProperty("endLine", issue.getEndLine());
+                                error.addProperty("endColumn", issue.getEndLineOffset());
+
+                                if (ruleSpecUrl != null) {
+                                    error.addProperty("message", String.format(
+                                            "[%s/%s/%s] %s\n%s\n%s",
+                                            issue.getSeverity(),
+                                            issue.getType(),
+                                            issue.getRuleKey(),
+                                            issue.getRuleName(),
+                                            issue.getMessage(),
+                                            ruleSpecUrl
+                                    ));
+                                } else {
+                                    error.addProperty("message", String.format(
+                                            "[%s/%s/%s] %s\n%s",
+                                            issue.getSeverity(),
+                                            issue.getType(),
+                                            issue.getRuleKey(),
+                                            issue.getRuleName(),
+                                            issue.getMessage()
+                                    ));
+                                }
+
+                                errors.add(error);
+                            }
                         });
 
-                if (errors.size() > 0) {
-                    logger.println(" + Fail");
-                } else {
-                    logger.println(" + Ok");
-                }
-
+                logger.println(" + Done");
                 logger.println();
             }
 
             if (!StringUtils.isEmpty(reportPath)) {
-                @SuppressWarnings("UnnecessaryLocalVariable")
-                File wDirectory = dir;
-                File rDirectory = new File(wDirectory, reportPath);
-
-                Path wDirectoryPath = wDirectory.toPath().normalize();
-                Path rDirectoryPath = rDirectory.toPath().normalize();
-
-                if (!rDirectoryPath.startsWith(wDirectoryPath)) {
-                    logger.println();
+                File reportDir = new File(dir, reportPath);
+                if (!reportDir.toPath().normalize().startsWith(dir.toPath())) {
                     throw new AbortException(
                             "Invalid value for \"Report Path\"! The path needs to be inside the workspace!"
                     );
                 }
 
-                if (!rDirectory.exists()) {
-                    if (!rDirectory.mkdirs()) {
-                        logger.println();
-                        throw new AbortException(String.format("Failed to create %s!", rDirectory.getAbsolutePath()));
+                if (!reportDir.exists()) {
+                    if (!reportDir.mkdirs()) {
+                        throw new AbortException(String.format("Failed to create %s!", reportDir.getAbsolutePath()));
                     }
                 }
 
-                File reportFile = new File(rDirectory, String.format("SonarLinter_%s.json", UUID.randomUUID().toString()));
+                String randomUUID = Long.toHexString(UUID.randomUUID().getMostSignificantBits());
+                File reportFile = new File(reportDir, String.format("SonarLint_%s.json", randomUUID));
                 if (reportFile.exists()) {
                     throw new AbortException(String.format(
                             "reportFile=%s already exists!",
@@ -291,9 +291,9 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
                     ));
                 }
 
-                Writer reportFW = new OutputStreamWriter(new FileOutputStream(reportFile), "UTF-8");
-                reportFW.write(errors.toString());
-                reportFW.close();
+                Writer streamWriter = new OutputStreamWriter(new FileOutputStream(reportFile), "UTF-8");
+                streamWriter.write(errors.toString());
+                streamWriter.close();
             }
 
             if (errors.size() > 0) {
