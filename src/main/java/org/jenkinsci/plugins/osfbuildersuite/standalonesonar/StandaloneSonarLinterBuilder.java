@@ -234,10 +234,9 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
                             if (clientInputFile != null) {
                                 JsonObject error = new JsonObject();
                                 error.addProperty("path", clientInputFile.relativePath());
-                                error.addProperty("startLine", issue.getStartLine());
-                                error.addProperty("startColumn", issue.getStartLineOffset());
-                                error.addProperty("endLine", issue.getEndLine());
-                                error.addProperty("endColumn", issue.getEndLineOffset());
+                                error.addProperty("start_line", issue.getStartLine());
+                                error.addProperty("end_line", issue.getEndLine());
+                                error.addProperty("annotation_level", "failure");
 
                                 if (ruleSpecUrl != null) {
                                     error.addProperty("message", String.format(
@@ -282,8 +281,8 @@ public class StandaloneSonarLinterBuilder extends Builder implements SimpleBuild
                     }
                 }
 
-                String randomUUID = Long.toHexString(UUID.randomUUID().getMostSignificantBits());
-                File reportFile = new File(reportDir, String.format("SonarLint_%s.json", randomUUID));
+                String randomUUID = UUID.randomUUID().toString();
+                File reportFile = new File(reportDir, String.format("SonarLint.%s.json", randomUUID));
                 if (reportFile.exists()) {
                     throw new AbortException(String.format(
                             "reportFile=%s already exists!",
